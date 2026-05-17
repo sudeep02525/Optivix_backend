@@ -11,7 +11,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'optivix_secret'
 const MONGODB_URI = process.env.MONGODB_URI
 
 // ── Connect to MongoDB ────────────────────────────────────────────────────────
-mongoose.connect(MONGODB_URI)
+mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 30000, // 30 seconds timeout
+  socketTimeoutMS: 45000, // 45 seconds socket timeout
+})
   .then(() => console.log('✅ MongoDB Atlas connected'))
   .catch(err => console.error('❌ MongoDB connection error:', err))
 
