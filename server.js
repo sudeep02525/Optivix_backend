@@ -138,4 +138,4 @@ app.post('/api/auth/logout', authMiddleware, (req, res) => {
   res.json({ message: 'Logged out successfully' })
 })
 
-app.listen(PORT, () => console.log(`Optivix Backend running on http://localhost:${PORT}`))
+app.listen(PORT, () => console.log(`🚀 Optivix Backend running on http://localhost:${PORT}`))
