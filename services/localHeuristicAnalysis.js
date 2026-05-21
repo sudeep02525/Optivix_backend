@@ -12,7 +12,59 @@ function computeScore(issues) {
   return Math.max(0, 100 - c * 25 - h * 15 - m * 7 - l * 2)
 }
 
-export function analyzeHeuristic(code, language = 'javascript') {
+function checkIncompleteSourceBackend(code, fileName = '') {
+  const issues = []
+  if (!code || String(code).trim().length < 10) return issues
+
+  const ext = (fileName || '').split('.').pop()?.toLowerCase() || ''
+  if (/import\s*\{/.test(code) && !/\bfrom\s+['"`]/.test(code)) {
+    issues.push({
+      id: 'inc-import',
+      type: 'bug',
+      severity: 'critical',
+      line: null,
+      title: 'Incomplete import statement',
+      description: 'import { ... } missing "from \'module\'" — file may be truncated.',
+      fix: 'Restore full imports and export default function wrapper.',
+    })
+  }
+
+  const lines = code.split('\n')
+  let seenFunction = false
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim()
+    if (/^(export\s+)?(default\s+)?function\s+\w/.test(t) || /^const\s+\w+\s*=\s*(\(|async)/.test(t) || /=>\s*\{/.test(t)) {
+      seenFunction = true
+    }
+    if (/^return\s*[\(\{]/.test(t) && !seenFunction) {
+      issues.push({
+        id: `inc-return-${i + 1}`,
+        type: 'bug',
+        severity: 'critical',
+        line: i + 1,
+        title: 'return outside a function',
+        description: `Line ${i + 1}: add export default function before return.`,
+        fix: 'Wrap JSX in export default function Component() { ... }',
+      })
+    }
+  }
+
+  if (['jsx', 'tsx'].includes(ext) && !/export\s+default/.test(code) && !/function\s+[A-Z]/.test(code)) {
+    issues.push({
+      id: 'inc-jsx-wrap',
+      type: 'bug',
+      severity: 'critical',
+      line: null,
+      title: 'Missing React component wrapper',
+      description: `${fileName || 'File'} needs export default function.`,
+      fix: 'Wrap JSX in a function and export it.',
+    })
+  }
+
+  return issues
+}
+
+export function analyzeHeuristic(code, language = 'javascript', fileName = '') {
   if (!code || String(code).trim().length < 10) {
     return {
       issues: [],
@@ -21,7 +73,7 @@ export function analyzeHeuristic(code, language = 'javascript') {
     }
   }
 
-  const issues = []
+  const issues = [...checkIncompleteSourceBackend(code, fileName)]
   const lines = code.split('\n')
   const lang = (language || 'javascript').toLowerCase()
   const isJsLike = ['javascript', 'js', 'jsx', 'typescript', 'ts', 'tsx'].includes(lang)

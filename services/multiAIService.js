@@ -20,7 +20,7 @@ async function useOllama() {
   return isOllamaAvailable()
 }
 
-export async function analyzeCode(code, language = 'javascript') {
+export async function analyzeCode(code, language = 'javascript', fileName = '') {
   if (await useOllama()) {
     try {
       return await ollamaAnalyzeCode(code, language)
@@ -28,7 +28,7 @@ export async function analyzeCode(code, language = 'javascript') {
       console.warn('Ollama analyze failed, using heuristics:', err.message)
     }
   }
-  const { issues, score, summary } = analyzeHeuristic(code, language)
+  const { issues, score, summary } = analyzeHeuristic(code, language, fileName)
   return {
     issues,
     score,

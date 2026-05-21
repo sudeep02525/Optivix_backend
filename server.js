@@ -303,7 +303,7 @@ app.post('/api/auth/logout', authMiddleware, (req, res) => {
 // Analyze code with AI
 app.post('/api/ai/analyze', authMiddleware, checkFreePeriodStatus, checkAIUsage, async (req, res) => {
   try {
-    const { code, language } = req.body
+    const { code, language, fileName } = req.body
     
     if (!code) {
       return res.status(400).json({ error: 'Code is required' })
@@ -312,7 +312,7 @@ app.post('/api/ai/analyze', authMiddleware, checkFreePeriodStatus, checkAIUsage,
     const user = req.user.fullData
 
     // Perform AI analysis
-    const result = await analyzeCode(code, language || 'javascript')
+    const result = await analyzeCode(code, language || 'javascript', fileName || '')
     
     // Increment usage for free plan
     await incrementAIUsage(req.user.id, user.plan)
