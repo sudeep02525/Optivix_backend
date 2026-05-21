@@ -2,7 +2,7 @@
  * Website SEO / security / performance audit (server-side HTML fetch)
  */
 
-function detectWebsiteType(html) {
+export function detectWebsiteType(html) {
   const checks = {
     'E-commerce': [/shopify/i, /woocommerce/i, /cart/i, /checkout/i],
     Blog: [/wordpress/i, /wp-content/i, /article/i],
@@ -82,38 +82,7 @@ export function analyzeWebsiteHtml(html, url) {
   }
 }
 
-export function fixWebsiteHtmlSEO(html) {
-  let fixed = html
-  const log = []
-
-  if (!/<title[\s>]/i.test(fixed)) {
-    fixed = fixed.replace(/<head([^>]*)>/i, `<head$1>\n  <title>Page Title - Your Website</title>`)
-    log.push('Added <title>')
-  }
-  if (!/<meta[^>]+name=["']description["']/i.test(fixed)) {
-    fixed = fixed.replace(/<\/title>/i, `</title>\n  <meta name="description" content="Your page description (150-160 characters)." />`)
-    log.push('Added meta description')
-  }
-  if (!/<meta[^>]+name=["']viewport["']/i.test(fixed)) {
-    fixed = fixed.replace(/<\/title>/i, `</title>\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />`)
-    log.push('Added viewport')
-  }
-  if (!/<meta[^>]+charset/i.test(fixed)) {
-    fixed = fixed.replace(/<head([^>]*)>/i, `<head$1>\n  <meta charset="UTF-8" />`)
-    log.push('Added charset')
-  }
-  const imgNoAlt = (fixed.match(/<img(?![^>]*\balt=)[^>]*>/gi) || []).length
-  if (imgNoAlt > 0) {
-    fixed = fixed.replace(/<img(?![^>]*\balt=)([^>]*)>/gi, '<img$1 alt="Describe this image">')
-    log.push(`Added alt to ${imgNoAlt} image(s)`)
-  }
-  if (/<html(?![^>]*\blang=)/i.test(fixed)) {
-    fixed = fixed.replace(/<html([^>]*)>/i, '<html$1 lang="en">')
-    log.push('Added lang="en"')
-  }
-  if (log.length === 0) log.push('SEO already looks good')
-  return { fixed, log }
-}
+export { fixWebsiteHtmlSEO, inferSeoMetaFromHtml, fixFolderSEOFiles } from './seoFixService.js'
 
 export async function fetchWebsiteHtml(rawUrl) {
   let url = rawUrl.trim()

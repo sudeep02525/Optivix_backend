@@ -3,11 +3,14 @@
  * Set AI_PROVIDER=ollama|heuristic|auto (default auto)
  */
 
-import { analyzeHeuristic, heuristicSuggestions, applyHeuristicFix } from './localHeuristicAnalysis.js'
+import { analyzeHeuristic, heuristicSuggestions, applyHeuristicFix, bulkApplyHeuristicFixes } from './localHeuristicAnalysis.js'
+import { fixFolderSEOFiles, fixWebsiteHtmlSEO } from './seoFixService.js'
 import {
   isOllamaAvailable,
   ollamaAnalyzeCode,
   ollamaGenerateFix,
+  ollamaFixAllBugs,
+  ollamaFixSEO,
   ollamaSelfHeal,
   getOllamaConfig,
 } from './ollamaService.js'
@@ -50,6 +53,138 @@ export async function generateFix(code, issue, language = 'javascript') {
   }
   const fixedCode = applyHeuristicFix(code, issue, language)
   return { fixedCode, aiModel: 'Heuristic fix' }
+}
+
+export async function fixAllBugs(code, language = 'javascript', fileName = '', deepFix = false) {
+  let issues = analyzeHeuristic(code, language, fileName).issues
+  const log = []
+
+  if (await useOllama()) {
+    try {
+      const analyzed = await ollamaAnalyzeCode(code, language)
+      if (analyzed?.issues?.length) {
+        const seen = new Set(issues.map((i) => `${i.title}-${i.line}`))
+        for (const i of analyzed.issues) {
+          const k = `${i.title}-${i.line}`
+          if (!seen.has(k)) {
+            seen.add(k)
+            issues.push(i)
+          }
+        }
+        log.push(`🔍 AI scan found ${analyzed.issues.length} issue(s)`)
+      }
+    } catch {
+      /* heuristic issues only */
+    }
+  }
+
+  const issuesSummary = issues
+    .slice(0, 30)
+    .map((i) => `- ${i.title}${i.line ? ` (line ${i.line})` : ''}: ${i.fix || i.description || ''}`)
+    .join('\n')
+
+  if (await useOllama()) {
+    try {
+      const fixed = await ollamaFixAllBugs(
+        code,
+        language,
+        issuesSummary || 'Detect every problem. Add missing code. Make file complete and runnable.',
+        deepFix
+      )
+      const changed = fixed.trim() !== code.trim() && fixed.length >= code.length * 0.5
+      if (changed) {
+        return {
+          fixedCode: fixed,
+          log: [
+            '✅ Fixed via Ollama (neural)',
+            issues.length ? `📋 Used ${issues.length} detected issue(s) as context` : '📋 Full-file AI repair',
+          ],
+          aiModel: `Ollama (${getOllamaConfig().model})`,
+        }
+      }
+      log.push('⚠️ Ollama returned unchanged code — applying rule fixes')
+    } catch (err) {
+      log.push(`⚠️ Ollama failed (${err.message}) — rule-based fix`)
+    }
+  }
+
+  let fixed = code
+  for (const issue of issues) {
+    const next = applyHeuristicFix(fixed, issue, language)
+    if (next !== fixed) log.push(`✅ ${issue.title}`)
+    fixed = next
+  }
+
+  const bulk = bulkApplyHeuristicFixes(fixed, fileName)
+  fixed = bulk.fixed
+  for (const line of bulk.log) {
+    if (!log.includes(line)) log.push(line)
+  }
+
+  return {
+    fixedCode: fixed,
+    log: log.length ? log : ['✅ No changes — code may already be clean'],
+    aiModel: 'Heuristic (local rules)',
+  }
+}
+
+export async function fixFolderSEO(files = []) {
+  const base = fixFolderSEOFiles(files)
+  let aiModel = 'SEO rules (full checklist)'
+
+  if (await useOllama()) {
+    const ctx = `Brand: ${base.brand}. Type: ${base.websiteType}. Purpose: ${base.summary}`
+    for (const f of base.files) {
+      try {
+        const enhanced = await ollamaFixSEO(f.content, ctx)
+        if (enhanced && enhanced.length > f.content.length * 0.6) {
+          f.content = enhanced
+          f.log = [...(f.log || []), '✅ Ollama SEO polish']
+        }
+      } catch {
+        /* keep rule-based fix */
+      }
+    }
+    aiModel = `Ollama (${getOllamaConfig().model}) + SEO rules`
+  }
+
+  return { ...base, aiModel }
+}
+
+export async function fixProjectFiles(files = [], deepFix = true) {
+  const codeFiles = files.filter((f) =>
+    /\.(jsx|tsx|js|ts|mjs|css|scss)$/i.test(f.path || f.name || '')
+  )
+  const results = []
+  const logs = [`📂 Scanning ${codeFiles.length} code file(s)…`]
+
+  for (const file of codeFiles.slice(0, 30)) {
+    const ext = (file.name || file.path || '').split('.').pop()?.toLowerCase()
+    const lang =
+      ext === 'css' || ext === 'scss'
+        ? 'css'
+        : ext === 'tsx'
+          ? 'typescript'
+          : ext === 'ts'
+            ? 'typescript'
+            : 'javascript'
+    const r = await fixAllBugs(file.content, lang, file.name || file.path, deepFix)
+    results.push({
+      path: file.path,
+      name: file.name,
+      content: r.fixedCode,
+      log: r.log,
+      aiModel: r.aiModel,
+    })
+    logs.push(`✅ ${file.name} — ${r.aiModel}`)
+  }
+
+  return {
+    files: results,
+    logs,
+    summary: `Fixed ${results.length} file(s)`,
+    aiModel: results[0]?.aiModel || 'Heuristic',
+  }
 }
 
 export async function selfHealCode(code, errorMessage, language = 'javascript') {

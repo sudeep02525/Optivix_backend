@@ -254,8 +254,8 @@ export function applyHeuristicFix(code, issue, language = 'javascript') {
   if (title.includes('==') || title.includes('equality')) {
     fixed = fixed.replace(/([^=!])==([^=])/g, '$1===$2')
   }
-  if (title.includes('var ')) {
-    fixed = fixed.replace(/\bvar\b/g, 'let')
+  if (title.includes('var')) {
+    fixed = fixed.replace(/^\s*var\s+/gm, (m) => m.replace('var', 'let'))
   }
   if (title.includes('innerhtml') || title.includes('xss')) {
     fixed = fixed.replace(/\.innerHTML\s*=\s*(['"`][^'"`]*['"`])/g, '.textContent = $1')
@@ -277,4 +277,75 @@ export function applyHeuristicFix(code, issue, language = 'javascript') {
   }
 
   return fixed
+}
+
+/** Bulk rule-based fixes (same patterns as IDE Fix Bugs button). */
+export function bulkApplyHeuristicFixes(code, fileName = '') {
+  const log = []
+  let fixed = code
+
+  const varCount = (fixed.match(/^\s*var\s+/gm) || []).length
+  if (varCount > 0) {
+    fixed = fixed.replace(/^\s*var\s+/gm, (m) => m.replace('var', 'let'))
+    log.push(`✅ Converted ${varCount} var → let`)
+  }
+
+  const eqCount = (fixed.match(/([^=!])==([^=])/g) || []).length
+  if (eqCount > 0) {
+    fixed = fixed.replace(/([^=!])==([^=])/g, '$1===$2')
+    log.push(`✅ Fixed ${eqCount} == → ===`)
+  }
+
+  if (/\.innerHTML\s*=\s*['"`]/.test(fixed)) {
+    fixed = fixed.replace(/\.innerHTML\s*=\s*(['"`][^'"`]*['"`])/g, '.textContent = $1')
+    log.push('✅ Fixed innerHTML → textContent')
+  }
+
+  if (/\beval\s*\(/.test(fixed)) {
+    fixed = fixed
+      .split('\n')
+      .map((line) => {
+        if (/\beval\s*\(/.test(line) && !line.trim().startsWith('//')) {
+          return line.replace(/\beval\s*\(/, '/* eval disabled */ // eval(')
+        }
+        return line
+      })
+      .join('\n')
+    log.push('✅ Disabled eval() calls')
+  }
+
+  const consoleCount = (fixed.match(/console\.(log|warn|debug)\(/g) || []).length
+  if (consoleCount > 0) {
+    fixed = fixed.replace(/console\.(log|warn|debug)\(/g, '// console.$1(')
+    log.push(`✅ Commented out ${consoleCount} console.log(s)`)
+  }
+
+  if (/key=\{index\}/.test(fixed)) {
+    fixed = fixed.replace(/key=\{index\}/g, 'key={item.id}')
+    log.push('✅ Fixed key={index}')
+  }
+
+  const ext = (fileName || '').split('.').pop()?.toLowerCase() || ''
+  if (['html', 'htm'].includes(ext) || /<html|<head/i.test(fixed)) {
+    const seo = fixWebsiteHtmlSEO(fixed)
+    if (seo.fixed !== fixed) {
+      fixed = seo.fixed
+      log.push(...(seo.log || []).map((l) => (l.startsWith('✅') ? l : `✅ ${l}`)))
+    }
+  }
+
+  const fname = fileName || ''
+  if (/\.(jsx|tsx)$/i.test(fname) && !/import\s+['"][^'"]*\.(css|scss|module\.css)['"]/i.test(fixed) && /className=/.test(fixed)) {
+    const base = fname.replace(/\.[^.]+$/, '')
+    fixed = `import './${base}.css'\n${fixed}`
+    log.push(`✅ Added CSS import ./${base}.css (create file if missing)`)
+  }
+
+  if (/\.(jsx|tsx)$/i.test(fname) && !/import\s+React/i.test(fixed) && /<\w+/.test(fixed)) {
+    fixed = `import React from 'react'\n${fixed}`
+    log.push('✅ Added React import')
+  }
+
+  if (log.length === 0) log.push('✅ No obvious pattern fixes needed')
+  return { fixed, log }
 }

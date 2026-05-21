@@ -97,6 +97,38 @@ ${code.slice(0, 10000)}
   return extractCodeBlock(raw) || code
 }
 
+export async function ollamaFixSEO(html, siteContext = '') {
+  const system =
+    'You are an SEO expert. Add EVERY missing SEO element: title, meta description, keywords, viewport, charset, robots, canonical, Open Graph, Twitter Card, theme-color, favicon, lang, h1, image alt, JSON-LD schema. ' +
+    'Use the site context for realistic copy. Return ONLY the full fixed HTML in one markdown code block.'
+  const user = `Site context:\n${siteContext}\n\nHTML:\n\`\`\`\n${html.slice(0, 12000)}\n\`\`\``
+  const raw = await ollamaChat(user, system)
+  return extractCodeBlock(raw) || html
+}
+
+export async function ollamaFixAllBugs(code, language = 'javascript', issuesSummary = '', deepFix = false) {
+  const isJsx = /jsx|tsx/i.test(language) || /import\s+React|export\s+default|<\w+[\s>]/.test(code)
+  const system = deepFix
+    ? 'You are a senior engineer doing a FULL file repair. Scan the ENTIRE file. Fix every bug, security issue, and anti-pattern. ' +
+      (isJsx
+        ? 'For JSX/TSX: fix component syntax, add missing React imports, export default, close all tags, fix keys and hooks. If no CSS/styles exist, add import for a .css file and add className hooks OR add a <style> block with basic layout styles. '
+        : '') +
+      'ADD anything missing: imports, exports, functions, wrappers, HTML head/body tags, meta tags, closing brackets, semicolons, CSS rules. ' +
+      'If the file is truncated or incomplete, reconstruct missing parts so it is valid and runnable. ' +
+      'Return ONLY the complete fixed source in one markdown code block — never truncate or use placeholders like "...".'
+    : 'You are an expert debugger. Fix ALL listed issues and obvious bugs/security problems. ' +
+      'Add missing imports/tags/brackets when clearly required. ' +
+      'Return ONLY the complete fixed source in one markdown code block. Keep valid imports/exports. Do not truncate or omit code.'
+  const user = `Language: ${language}
+${issuesSummary ? `Issues to fix:\n${issuesSummary}\n\n` : 'Detect and fix ALL problems in this file.\n\n'}Code:
+\`\`\`
+${code.slice(0, 14000)}
+\`\`\``
+  const raw = await ollamaChat(user, system)
+  const fixed = extractCodeBlock(raw)
+  return fixed && fixed.length > 10 ? fixed : code
+}
+
 export async function ollamaSelfHeal(code, errorMessage, language = 'javascript') {
   const system = 'You are a production incident engineer. Fix the crash with minimal safe changes. Return ONLY fixed code in a markdown block.'
   const user = `Production error:

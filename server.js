@@ -4,8 +4,12 @@ import cors from 'cors'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import mongoose from 'mongoose'
-import { analyzeCode, generateFix, getSuggestions, checkAIHealth, selfHealCode } from './services/multiAIService.js'
+import { analyzeCode, generateFix, fixAllBugs, fixFolderSEO, fixProjectFiles, getSuggestions, checkAIHealth, selfHealCode } from './services/multiAIService.js'
 import { fetchWebsiteHtml, analyzeWebsiteHtml, fixWebsiteHtmlSEO } from './services/websiteAuditService.js'
+import { createOtp, verifyOtp } from './services/otpService.js'
+import { sendOtpEmail } from './services/emailService.js'
+import { execTerminalCommand, setTerminalCwd, getTerminalStatus, clearTerminalHistory, useWorkspaceAsCwd } from './services/terminalService.js'
+import { syncWorkspaceFiles, getWorkspaceDir } from './services/workspaceSyncService.js'
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -201,14 +205,42 @@ app.get('/api/ai/health', async (req, res) => {
   }
 })
 
-// Register with Free Period
+// Send email OTP — register only (verify email before account is created)
+app.post('/api/auth/send-otp', async (req, res) => {
+  try {
+    const { email } = req.body
+    if (!email) {
+      return res.status(400).json({ error: 'Email required' })
+    }
+    const normalized = email.toLowerCase().trim()
+    const existing = await User.findOne({ email: normalized })
+    if (existing) {
+      return res.status(409).json({ error: 'Email already registered — sign in instead' })
+    }
+    const code = createOtp(normalized, 'register')
+    await sendOtpEmail(normalized, code)
+    res.json({
+      message: 'Verification code sent to your email',
+      expiresInMinutes: 10,
+      sent: true,
+    })
+  } catch (err) {
+    console.error('Send OTP error:', err)
+    res.status(500).json({ error: err.message || 'Failed to send OTP email' })
+  }
+})
+
+// Register with Free Period (+ email OTP)
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body
-    if (!name || !email || !password)
-      return res.status(400).json({ error: 'All fields required' })
+    const { name, email, password, otp } = req.body
+    if (!name || !email || !password || !otp)
+      return res.status(400).json({ error: 'All fields including OTP required' })
     if (password.length < 6)
       return res.status(400).json({ error: 'Password must be at least 6 characters' })
+
+    const otpCheck = verifyOtp(email, otp, 'register')
+    if (!otpCheck.ok) return res.status(400).json({ error: otpCheck.error })
 
     const existing = await User.findOne({ email })
     if (existing) return res.status(409).json({ error: 'Email already registered' })
@@ -257,7 +289,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 })
 
-// Login
+// Login (email + password only — OTP was used at registration to verify email)
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body
@@ -390,6 +422,27 @@ app.post('/api/ai/fix', authMiddleware, checkFreePeriodStatus, checkAIUsage, asy
   }
 })
 
+// Fix all bugs in one pass (Ollama when available, else heuristics)
+app.post('/api/ai/fix-bugs', authMiddleware, checkFreePeriodStatus, checkAIUsage, async (req, res) => {
+  try {
+    const { code, language, fileName, deepFix } = req.body
+    if (!code) {
+      return res.status(400).json({ error: 'Code is required' })
+    }
+    const user = req.user.fullData
+    const result = await fixAllBugs(code, language || 'javascript', fileName || '', !!deepFix)
+    await incrementAIUsage(req.user.id, user.plan)
+    res.json({
+      fixedCode: result.fixedCode,
+      log: result.log,
+      aiModel: result.aiModel,
+    })
+  } catch (error) {
+    console.error('Fix-bugs error:', error)
+    res.status(500).json({ error: 'Failed to fix bugs' })
+  }
+})
+
 // Self-heal production-style crash
 app.post('/api/ai/self-heal', authMiddleware, checkFreePeriodStatus, checkAIUsage, async (req, res) => {
   try {
@@ -435,6 +488,36 @@ app.post('/api/ai/website-fix-seo', authMiddleware, checkFreePeriodStatus, check
   } catch (error) {
     console.error('Website SEO fix error:', error)
     res.status(500).json({ error: 'Failed to fix SEO' })
+  }
+})
+
+// Fix SEO on all HTML files in opened folder
+app.post('/api/ai/fix-folder-seo', authMiddleware, checkFreePeriodStatus, checkAIUsage, async (req, res) => {
+  try {
+    const { files } = req.body
+    if (!files?.length) return res.status(400).json({ error: 'files array is required' })
+    const user = req.user.fullData
+    const result = await fixFolderSEO(files)
+    await incrementAIUsage(req.user.id, user.plan)
+    res.json(result)
+  } catch (error) {
+    console.error('Folder SEO fix error:', error)
+    res.status(500).json({ error: 'Failed to fix folder SEO' })
+  }
+})
+
+// Fix bugs across all code files in folder
+app.post('/api/ai/fix-project', authMiddleware, checkFreePeriodStatus, checkAIUsage, async (req, res) => {
+  try {
+    const { files, deepFix } = req.body
+    if (!files?.length) return res.status(400).json({ error: 'files array is required' })
+    const user = req.user.fullData
+    const result = await fixProjectFiles(files, !!deepFix)
+    await incrementAIUsage(req.user.id, user.plan)
+    res.json(result)
+  } catch (error) {
+    console.error('Project fix error:', error)
+    res.status(500).json({ error: 'Failed to fix project' })
   }
 })
 
@@ -550,6 +633,58 @@ app.post('/api/user/upgrade', authMiddleware, async (req, res) => {
     console.error('Upgrade error:', error)
     res.status(500).json({ error: 'Failed to upgrade' })
   }
+})
+
+// Sync IDE folder → backend disk (npm install, mkdir, dev server, etc.)
+app.post('/api/workspace/sync', authMiddleware, async (req, res) => {
+  try {
+    const { folderName, files } = req.body
+    if (!folderName || !Array.isArray(files)) {
+      return res.status(400).json({ error: 'folderName and files[] required' })
+    }
+    if (files.length > 1200) {
+      return res.status(400).json({ error: 'Too many files (max 1200). node_modules is skipped automatically.' })
+    }
+    const result = syncWorkspaceFiles(req.user.id, folderName, files)
+    const cwdResult = useWorkspaceAsCwd(req.user.id, result.workspacePath)
+    res.json({ ...result, cwd: cwdResult.cwd })
+  } catch (error) {
+    console.error('Workspace sync error:', error)
+    res.status(500).json({ error: error.message || 'Sync failed' })
+  }
+})
+
+app.get('/api/workspace/path', authMiddleware, (req, res) => {
+  const { folderName } = req.query
+  if (!folderName) return res.status(400).json({ error: 'folderName required' })
+  res.json({ workspacePath: getWorkspaceDir(req.user.id, folderName) })
+})
+
+// Integrated terminal (real shell on synced workspace)
+app.post('/api/terminal/cwd', authMiddleware, async (req, res) => {
+  const result = setTerminalCwd(req.user.id, req.body?.cwd, { create: !!req.body?.create })
+  if (!result.ok) return res.status(400).json(result)
+  res.json(result)
+})
+
+app.post('/api/terminal/exec', authMiddleware, async (req, res) => {
+  try {
+    const { command, cwd } = req.body
+    const result = await execTerminalCommand(req.user.id, command, cwd)
+    if (!result.ok) return res.status(400).json(result)
+    res.json(result)
+  } catch (error) {
+    console.error('Terminal exec error:', error)
+    res.status(500).json({ error: error.message || 'Command failed' })
+  }
+})
+
+app.get('/api/terminal/status', authMiddleware, (req, res) => {
+  res.json(getTerminalStatus(req.user.id))
+})
+
+app.post('/api/terminal/clear', authMiddleware, (req, res) => {
+  res.json(clearTerminalHistory(req.user.id))
 })
 
 app.listen(PORT, () => console.log(`🚀 Optivix Backend running on http://localhost:${PORT}`))
