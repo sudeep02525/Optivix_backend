@@ -209,6 +209,56 @@ export function fixWebsiteHtmlSEO(html, siteContext = null) {
     log.push(`✅ Added Schema.org JSON-LD (${ctx.websiteType})`)
   }
 
+  // 1. Fix multiple H1s (keep first, change rest to H2)
+  let h1CountFound = 0;
+  fixed = fixed.replace(/<h1([^>]*)>([\s\S]*?)<\/h1>/gi, (match, attrs, content) => {
+    h1CountFound++;
+    if (h1CountFound > 1) {
+      return `<h2${attrs}>${content}</h2>`;
+    }
+    return match;
+  });
+  if (h1CountFound > 1) log.push(`✅ Changed ${h1CountFound - 1} extra <h1> tags to <h2>`);
+
+  // 2. Add loading="lazy" to images missing it
+  const imgNoLazy = (fixed.match(/<img(?![^>]*\bloading=)[^>]*>/gi) || []).length;
+  if (imgNoLazy > 0) {
+    fixed = fixed.replace(/<img(?![^>]*\bloading=)([^>]*)>/gi, '<img$1 loading="lazy">');
+    log.push(`✅ Added loading="lazy" to ${imgNoLazy} image(s)`);
+  }
+
+  // 3. Add rel="noopener noreferrer" to target="_blank" links
+  const linkNoOpener = (fixed.match(/<a[^>]+target=["']_blank["'](?![^>]*\brel=)[^>]*>/gi) || []).length;
+  if (linkNoOpener > 0) {
+    fixed = fixed.replace(/(<a[^>]+target=["']_blank["'])(?![^>]*\brel=)([^>]*>)/gi, '$1 rel="noopener noreferrer"$2');
+    log.push(`✅ Added rel="noopener noreferrer" to ${linkNoOpener} external link(s)`);
+  }
+
+  // 4. Add defer to external scripts (basic performance boost)
+  const scriptNoDefer = (fixed.match(/<script(?![^>]*\b(defer|async|type=["']module["']))[^>]+src=[^>]+>/gi) || []).length;
+  if (scriptNoDefer > 0) {
+    fixed = fixed.replace(/(<script(?![^>]*\b(defer|async|type=["']module["']))[^>]+src=[^>]+)>/gi, '$1 defer>');
+    log.push(`✅ Added defer attribute to ${scriptNoDefer} render-blocking script(s)`);
+  }
+
+  // 5. Add aria-label to inputs missing it (Accessibility)
+  const inputNoLabel = (fixed.match(/<input(?![^>]*\b(aria-label|aria-labelledby|title)=)[^>]*>/gi) || []).length;
+  if (inputNoLabel > 0) {
+    fixed = fixed.replace(/(<input(?![^>]*\b(aria-label|aria-labelledby|title)=)[^>]*)>/gi, '$1 aria-label="Input field">');
+    log.push(`✅ Added aria-label to ${inputNoLabel} input field(s)`);
+  }
+
+  // 6. Fix empty links (Accessibility)
+  let linkEmptyCount = 0;
+  fixed = fixed.replace(/<a([^>]*)>(\s*|(<[^>]+>)*\s*)<\/a>/gi, (match, attrs, content) => {
+    if (!attrs.includes('aria-label') && !attrs.includes('title')) {
+      linkEmptyCount++;
+      return `<a${attrs} aria-label="Link">${content}</a>`;
+    }
+    return match;
+  });
+  if (linkEmptyCount > 0) log.push(`✅ Added aria-label to ${linkEmptyCount} empty link(s)`);
+
   if (log.length === 0) log.push('✅ SEO complete — all standard tags present')
   return { fixed, log, context: ctx }
 }
@@ -276,11 +326,43 @@ export function fixFolderSEOFiles(files) {
     allLogs.push(`📄 ${file.name}: ${log.length} change(s)`)
   }
 
+  // Generate sitemap.xml and robots.txt
+  if (siteContext.canonical && siteContext.canonical.startsWith('http')) {
+    const urls = results.map(f => {
+      let urlPath = (f.path || f.name).replace(/\\/g, '/');
+      if (urlPath.startsWith('./') || urlPath.startsWith('/')) urlPath = urlPath.replace(/^[\.\/]+/, '');
+      if (urlPath === 'index.html' || urlPath.endsWith('/index.html')) urlPath = urlPath.replace(/index\.html$/, '');
+      if (urlPath.endsWith('/')) urlPath = urlPath.slice(0, -1);
+      
+      const priority = urlPath === '' ? '1.0' : '0.8';
+      return `  <url>\n    <loc>${siteContext.canonical}${urlPath ? '/' + urlPath : ''}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>${priority}</priority>\n  </url>`;
+    }).join('\n');
+
+    const sitemapContent = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>`;
+    
+    results.push({
+      path: 'sitemap.xml',
+      name: 'sitemap.xml',
+      content: sitemapContent,
+      log: ['✅ Generated sitemap.xml'],
+    });
+    allLogs.push('🗺️ Generated sitemap.xml automatically');
+
+    const robotsContent = `User-agent: *\nAllow: /\n\nSitemap: ${siteContext.canonical}/sitemap.xml\n`;
+    results.push({
+      path: 'robots.txt',
+      name: 'robots.txt',
+      content: robotsContent,
+      log: ['✅ Generated robots.txt'],
+    });
+    allLogs.push('🤖 Generated robots.txt automatically');
+  }
+
   return {
     files: results,
     websiteType: siteContext.websiteType,
     brand: siteContext.brand,
-    summary: `Fixed SEO on ${results.length} HTML file(s)`,
+    summary: `Fixed SEO on ${results.length - 2} HTML file(s) and generated maps`,
     logs: allLogs,
   }
 }

@@ -1,51 +1,54 @@
-import nodemailer from 'nodemailer'
+import nodemailer from "nodemailer";
 
-let transporter = null
+let transporter = null;
 
 function getSmtpTransporter() {
-  if (transporter) return transporter
-  const host = process.env.SMTP_HOST
-  const user = process.env.SMTP_USER
-  const pass = process.env.SMTP_PASS
-  if (!host || !user || !pass) return null
+  if (transporter) return transporter;
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  if (!host || !user || !pass) return null;
 
   transporter = nodemailer.createTransport({
     host,
     port: Number(process.env.SMTP_PORT) || 587,
-    secure: process.env.SMTP_SECURE === 'true',
+    secure: process.env.SMTP_SECURE === "true",
     auth: { user, pass },
     tls: {
-      rejectUnauthorized: false
-    }
-  })
-  return transporter
+      rejectUnauthorized: false,
+    },
+  });
+  return transporter;
 }
 
 async function sendViaResend(to, code) {
-  const apiKey = process.env.RESEND_API_KEY
-  const from = process.env.RESEND_FROM || process.env.SMTP_FROM || 'Optivix <onboarding@resend.dev>'
-  if (!apiKey) return null
+  const apiKey = process.env.RESEND_API_KEY;
+  const from =
+    process.env.RESEND_FROM ||
+    process.env.SMTP_FROM ||
+    "Optivix <onboarding@resend.dev>";
+  if (!apiKey) return null;
 
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       from,
       to: [to],
-      subject: 'Optivix — Verify your email address',
+      subject: "Optivix — Verify your email address",
       html: buildOtpHtml(to, code),
       text: `Welcome to Optivix!\n\nUse the following 6-digit verification code to complete your registration:\n\n${code}\n\nThis code is valid for 10 minutes. If you did not request this code, you can safely ignore this email.\n\nBest regards,\nThe Optivix Team\nOptivix Inc., San Francisco, CA`,
     }),
-  })
+  });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.message || `Resend failed (${res.status})`)
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || `Resend failed (${res.status})`);
   }
-  return { sent: true }
+  return { sent: true };
 }
 
 function buildOtpHtml(to, code) {
@@ -95,25 +98,25 @@ function buildOtpHtml(to, code) {
       </table>
     </body>
     </html>
-  `
+  `;
 }
 
 async function sendViaSmtp(to, code) {
-  const transport = getSmtpTransporter()
-  if (!transport) return null
+  const transport = getSmtpTransporter();
+  if (!transport) return null;
 
   await transport.verify().catch((err) => {
-    throw new Error(`SMTP connection failed: ${err.message}`)
-  })
+    throw new Error(`SMTP connection failed: ${err.message}`);
+  });
 
   await transport.sendMail({
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to,
-    subject: 'Optivix — Verify your email address',
+    subject: "Optivix — Verify your email address",
     html: buildOtpHtml(to, code),
     text: `Welcome to Optivix!\n\nUse the following 6-digit verification code to complete your registration:\n\n${code}\n\nThis code is valid for 10 minutes. If you did not request this code, you can safely ignore this email.\n\nBest regards,\nThe Optivix Team\nOptivix Inc., San Francisco, CA`,
-  })
-  return { sent: true }
+  });
+  return { sent: true };
 }
 
 /**
@@ -123,25 +126,31 @@ export async function sendOtpEmail(to, code) {
   // Try sending via Resend first (if API Key is configured)
   if (process.env.RESEND_API_KEY) {
     try {
-      const r = await sendViaResend(to, code)
-      if (r?.sent) return r
+      const r = await sendViaResend(to, code);
+      if (r?.sent) return r;
     } catch (err) {
-      console.warn('[Resend API Error] Falling back to Gmail SMTP:', err.message)
+      console.warn(
+        "[Resend API Error] Falling back to Gmail SMTP:",
+        err.message,
+      );
     }
   }
 
   // Try sending via Gmail SMTP
   try {
-    const s = await sendViaSmtp(to, code)
-    if (s?.sent) return s
+    const s = await sendViaSmtp(to, code);
+    if (s?.sent) return s;
   } catch (err) {
-    console.error('[Gmail SMTP Error] Falling back to local terminal logs:', err.message)
+    console.error(
+      "[Gmail SMTP Error] Falling back to local terminal logs:",
+      err.message,
+    );
   }
 
   // Ultimate development / debug fallback: print directly to console log
-  console.log(`\n🔑 ════════════════════════════════════════════`)
-  console.log(`🔑 [DEVELOPMENT ONLY] No active email delivery succeeded.`)
-  console.log(`🔑 OTP for ${to} is: ${code}`)
-  console.log(`🔑 ════════════════════════════════════════════\n`)
-  return { sent: true, devMode: true }
+  console.log(`\n🔑 ════════════════════════════════════════════`);
+  console.log(`🔑 [DEVELOPMENT ONLY] No active email delivery succeeded.`);
+  console.log(`🔑 OTP for ${to} is: ${code}`);
+  console.log(`🔑 ════════════════════════════════════════════\n`);
+  return { sent: true, devMode: true };
 }
