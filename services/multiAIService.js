@@ -153,21 +153,44 @@ export async function fixFolderSEO(files = []) {
 
 export async function fixProjectFiles(files = [], deepFix = true) {
   const codeFiles = files.filter((f) =>
-    /\.(jsx|tsx|js|ts|mjs|css|scss)$/i.test(f.path || f.name || '')
+    /\.(jsx|tsx|js|ts|mjs|css|scss|c|cpp|h|hpp|java|go|rs|py|php|sh|sql|rb|json|md)$/i.test(f.path || f.name || '')
   )
   const results = []
   const logs = [`📂 Scanning ${codeFiles.length} code file(s)…`]
 
   for (const file of codeFiles.slice(0, 30)) {
     const ext = (file.name || file.path || '').split('.').pop()?.toLowerCase()
-    const lang =
-      ext === 'css' || ext === 'scss'
-        ? 'css'
-        : ext === 'tsx'
-          ? 'typescript'
-          : ext === 'ts'
-            ? 'typescript'
-            : 'javascript'
+    let lang = 'javascript'
+    
+    if (ext === 'css' || ext === 'scss') {
+      lang = 'css'
+    } else if (ext === 'tsx' || ext === 'ts') {
+      lang = 'typescript'
+    } else if (ext === 'c' || ext === 'h') {
+      lang = 'c'
+    } else if (ext === 'cpp' || ext === 'hpp') {
+      lang = 'cpp'
+    } else if (ext === 'java') {
+      lang = 'java'
+    } else if (ext === 'go') {
+      lang = 'go'
+    } else if (ext === 'rs') {
+      lang = 'rust'
+    } else if (ext === 'py') {
+      lang = 'python'
+    } else if (ext === 'php') {
+      lang = 'php'
+    } else if (ext === 'sh') {
+      lang = 'shell'
+    } else if (ext === 'sql') {
+      lang = 'sql'
+    } else if (ext === 'rb') {
+      lang = 'ruby'
+    } else if (ext === 'json') {
+      lang = 'json'
+    } else if (ext === 'md') {
+      lang = 'markdown'
+    }
     const r = await fixAllBugs(file.content, lang, file.name || file.path, deepFix)
     results.push({
       path: file.path,

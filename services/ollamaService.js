@@ -3,10 +3,10 @@
  */
 
 const OLLAMA_BASE = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '')
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'codellama'
 const TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 90000
 
 let ollamaAvailableCache = { at: 0, ok: false }
+let activeOllamaModel = process.env.OLLAMA_MODEL || 'codellama'
 
 export async function isOllamaAvailable(force = false) {
   const now = Date.now()
@@ -16,30 +16,57 @@ export async function isOllamaAvailable(force = false) {
     const t = setTimeout(() => ctrl.abort(), 4000)
     const res = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: ctrl.signal })
     clearTimeout(t)
-    ollamaAvailableCache = { at: now, ok: res.ok }
-    return res.ok
+    
+    if (res.ok) {
+      const data = await res.json()
+      const models = data.models || []
+      if (models.length > 0) {
+        const configuredModel = process.env.OLLAMA_MODEL || 'codellama'
+        const names = models.map(m => m.name)
+        
+        // Find exact or substring match
+        const found = names.find(n => n.toLowerCase().includes(configuredModel.toLowerCase()) || configuredModel.toLowerCase().includes(n.toLowerCase()))
+        if (found) {
+          activeOllamaModel = found
+        } else {
+          // Fallback to the first installed model (e.g. llama3.2:latest)
+          activeOllamaModel = models[0].name
+          console.log(`🤖 Ollama model '${configuredModel}' not found on machine. Using installed model instead: '${activeOllamaModel}'`)
+        }
+      }
+      ollamaAvailableCache = { at: now, ok: true }
+      return true
+    }
+    
+    ollamaAvailableCache = { at: now, ok: false }
+    return false
   } catch {
     ollamaAvailableCache = { at: now, ok: false }
     return false
   }
 }
 
-async function ollamaChat(userPrompt, systemPrompt = '') {
+async function ollamaChat(userPrompt, systemPrompt = '', jsonMode = false) {
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
   try {
+    const requestBody = {
+      model: activeOllamaModel,
+      stream: false,
+      messages: [
+        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+        { role: 'user', content: userPrompt },
+      ],
+    }
+    if (jsonMode) {
+      requestBody.format = 'json'
+    }
+
     const res = await fetch(`${OLLAMA_BASE}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal: ctrl.signal,
-      body: JSON.stringify({
-        model: OLLAMA_MODEL,
-        stream: false,
-        messages: [
-          ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-          { role: 'user', content: userPrompt },
-        ],
-      }),
+      body: JSON.stringify(requestBody),
     })
     if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`)
     const data = await res.json()
@@ -69,14 +96,14 @@ export async function ollamaAnalyzeCode(code, language = 'javascript') {
   const system = `You are a senior code reviewer. Respond with ONLY valid JSON:
 {"issues":[{"id":"string","type":"bug|security|performance","severity":"critical|high|medium|low","line":number|null,"title":"string","description":"string","fix":"string"}],"score":0-100,"summary":"string"}`
   const user = `Language: ${language}\n\nAnalyze this code:\n\`\`\`\n${code.slice(0, 12000)}\n\`\`\``
-  const raw = await ollamaChat(user, system)
+  const raw = await ollamaChat(user, system, true)
   const parsed = extractJson(raw)
   if (parsed?.issues && Array.isArray(parsed.issues)) {
     return {
       issues: parsed.issues,
       score: typeof parsed.score === 'number' ? parsed.score : 70,
       summary: parsed.summary || 'Ollama analysis complete',
-      aiModel: `Ollama (${OLLAMA_MODEL})`,
+      aiModel: `Ollama (${activeOllamaModel})`,
     }
   }
   throw new Error('Ollama returned invalid JSON')
@@ -143,5 +170,5 @@ ${code.slice(0, 10000)}
 }
 
 export function getOllamaConfig() {
-  return { baseUrl: OLLAMA_BASE, model: OLLAMA_MODEL }
+  return { baseUrl: OLLAMA_BASE, model: activeOllamaModel }
 }

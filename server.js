@@ -108,28 +108,11 @@ async function checkFreePeriodStatus(req, res, next) {
       return res.status(404).json({ error: 'User not found' })
     }
     
-    // Check if free period expired
-    if (user.plan === 'free_period' && new Date() > user.freePeriodEndDate) {
-      user.plan = 'free'
-      user.freePeriodActive = false
-      user.limits.aiAnalysesPerDay = 10
-      user.limits.maxProjects = 3
-      await user.save()
-      req.freePeriodExpired = true
-    }
-    
-    // Reset daily usage for free plan users (midnight reset)
-    if (user.plan === 'free') {
-      const today = new Date().toDateString()
-      const lastReset = new Date(user.aiUsage.lastResetDate).toDateString()
-      
-      if (today !== lastReset) {
-        user.aiUsage.today = 0
-        user.aiUsage.lastResetDate = new Date()
-        await user.save()
-      }
-    }
-    
+    // Always enforce direct PRO plan
+    user.plan = 'pro'
+    user.freePeriodActive = false
+    user.limits.aiAnalysesPerDay = 999999
+    user.limits.maxProjects = 999999
     req.user.fullData = user
     next()
   } catch (error) {
@@ -140,50 +123,13 @@ async function checkFreePeriodStatus(req, res, next) {
 
 // ── Check AI Usage Limits ─────────────────────────────────────────────────────
 async function checkAIUsage(req, res, next) {
-  try {
-    const user = req.user.fullData
-    
-    // No limits for free_period, pro, or enterprise
-    if (['free_period', 'pro', 'enterprise'].includes(user.plan)) {
-      return next()
-    }
-    
-    // Check limits for free plan
-    if (user.plan === 'free' && user.aiUsage.today >= user.limits.aiAnalysesPerDay) {
-      // Calculate time until reset (midnight)
-      const now = new Date()
-      const tomorrow = new Date(now)
-      tomorrow.setDate(tomorrow.getDate() + 1)
-      tomorrow.setHours(0, 0, 0, 0)
-      const hoursUntilReset = Math.ceil((tomorrow - now) / (1000 * 60 * 60))
-      
-      return res.status(429).json({ 
-        error: 'Daily limit reached',
-        message: `You've used all ${user.limits.aiAnalysesPerDay} AI analyses today. Resets in ${hoursUntilReset} hours.`,
-        limit: user.limits.aiAnalysesPerDay,
-        used: user.aiUsage.today,
-        resetIn: hoursUntilReset,
-        upgradeUrl: '/payment?plan=pro'
-      })
-    }
-    
-    next()
-  } catch (error) {
-    console.error('Usage check error:', error)
-    res.status(500).json({ error: 'Server error' })
-  }
+  // Always grant unlimited access
+  next()
 }
 
 // ── Increment AI Usage ────────────────────────────────────────────────────────
 async function incrementAIUsage(userId, plan) {
-  if (plan === 'free') {
-    await User.findByIdAndUpdate(userId, {
-      $inc: { 
-        'aiUsage.today': 1,
-        'aiUsage.totalUsed': 1
-      }
-    })
-  }
+  // Free plan is removed, no usage tracking required
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -247,20 +193,17 @@ app.post('/api/auth/register', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10)
     
-    // Create user with 30-day free period
-    const freePeriodEndDate = new Date()
-    freePeriodEndDate.setDate(freePeriodEndDate.getDate() + 30)
-    
+    // Create user with direct PRO plan
     const user = await User.create({ 
       name, 
       email, 
       password: hashedPassword,
-      plan: 'free_period',
+      plan: 'pro',
       freePeriodStartDate: new Date(),
-      freePeriodEndDate: freePeriodEndDate,
-      freePeriodActive: true,
+      freePeriodEndDate: new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000), // 10 years
+      freePeriodActive: false,
       limits: {
-        aiAnalysesPerDay: 999999, // Unlimited during free period
+        aiAnalysesPerDay: 999999,
         maxProjects: 999999
       }
     })
@@ -281,7 +224,7 @@ app.post('/api/auth/register', async (req, res) => {
         freePeriodEndDate: user.freePeriodEndDate,
         freePeriodActive: user.freePeriodActive
       },
-      message: '🎉 Welcome! You have 30 days of unlimited AI access!'
+      message: '🎉 Welcome! You have unlimited AI access on the PRO plan!'
     })
   } catch (err) {
     console.error('Register error:', err)
@@ -554,52 +497,22 @@ app.get('/api/user/status', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'User not found' })
     }
     
-    // Calculate days/hours remaining
-    let daysRemaining = 0
-    let hoursRemaining = 0
-    
-    if (user.plan === 'free_period') {
-      const now = new Date()
-      const endDate = new Date(user.freePeriodEndDate)
-      const diffTime = endDate - now
-      daysRemaining = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-      hoursRemaining = Math.ceil(diffTime / (1000 * 60 * 60))
-      
-      // If expired, downgrade
-      if (daysRemaining <= 0) {
-        user.plan = 'free'
-        user.freePeriodActive = false
-        user.limits.aiAnalysesPerDay = 10
-        user.limits.maxProjects = 3
-        await user.save()
-      }
-    }
-    
-    // Calculate reset time for free plan
-    let resetIn = 0
-    if (user.plan === 'free') {
-      const now = new Date()
-      const tomorrow = new Date(now)
-      tomorrow.setDate(tomorrow.getDate() + 1)
-      tomorrow.setHours(0, 0, 0, 0)
-      resetIn = Math.ceil((tomorrow - now) / (1000 * 60 * 60))
-    }
-    
+    // Always force PRO plan and unlimited status
     res.json({
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-        plan: user.plan,
-        freePeriodActive: user.freePeriodActive,
-        freePeriodEndDate: user.freePeriodEndDate,
-        daysRemaining: daysRemaining,
-        hoursRemaining: hoursRemaining,
-        limits: user.limits,
-        usage: user.plan === 'free' ? {
-          ...user.aiUsage,
-          resetIn: resetIn
-        } : null
+        plan: 'pro',
+        freePeriodActive: false,
+        freePeriodEndDate: new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000),
+        daysRemaining: 9999,
+        hoursRemaining: 99999,
+        limits: {
+          aiAnalysesPerDay: 999999,
+          maxProjects: 999999
+        },
+        usage: null
       }
     })
   } catch (error) {
